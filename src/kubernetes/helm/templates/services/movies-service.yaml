@@ -8,6 +8,8 @@ metadata:
     app: movies-service
     app.kubernetes.io/name: {{ include "cinemaabyss.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    proxy.istio.io/config: '{ "holdApplicationUntilProxyStarts": true }'
 spec:
   replicas: {{ .Values.moviesService.replicas }}
   selector:

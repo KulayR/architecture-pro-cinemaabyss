@@ -1,0 +1,102 @@
+@startuml
+!includeurl ./common/C4_Container.puml
+
+title to be архитектура КиноБездны
+
+Person(user, "Пользователь", "Web, Mobile, TV")
+
+System_Ext(recommender_ext, "ML Platform", "Внешняя система рекомендаций")
+System_Ext(payment_gateway, "Платёжный шлюз", "ЮКасса")
+
+System_Boundary(partners, "Внешние Партнеры") {
+    System_Ext(partner_api, "Partner APIs", "Получение ссылок")
+    System_Ext(partner_cdn, "Partner CDNs", "Стриминг видео")
+}
+
+System_Boundary(k8s, "Kubernetes Cluster") {
+
+    Container(apigw, "API Gateway", "Kong", "TLS, Routing, Rate Limiting")
+
+    ' --- AUTH DOMAIN ---
+    Container(auth, "Auth Service", "Keycloak", "Identity Provider")
+    ContainerDb(db_auth, "Auth DB", "PostgreSQL", "Users, Credentials, Sessions")
+
+    ' --- AGGREGATION LAYER ---
+    Container(bff, "BFF (Web/Mob/TV)", "Go", "Агрегация данных для UI")
+
+    ' --- CORE DOMAINS ---
+
+    ' 1. Users
+    Container(users_svc, "Users Service", "Go", "Управление профилями, настройки")
+    ContainerDb(db_users, "Users DB", "PostgreSQL", "Profiles, Avatars, Settings")
+
+    ' 2. Subscriptions & Payments
+    Container(sub_svc, "Billing Service", "Go", "Подписки, транзакции, права доступа")
+    ContainerDb(db_bill, "Billing DB", "PostgreSQL", "Orders, Invoices, Entitlements")
+
+    ' 3. Content & Search
+    Container(content_svc, "Catalog Service", "Go", "Синхронизация метаданных, поиск")
+    ContainerDb(db_content, "Catalog DB", "PostgreSQL", "Данные о фильмах и сериалах")
+    ContainerDb(es_content, "Search Index", "Elasticsearch", "Полнотекстовый поиск, фильтры")
+
+    ' 4. Streaming Logic
+    Container(resolver_svc, "Stream Resolver", "Go", "Обмен токенов, выбор партнера")
+    ContainerDb(redis_tokens, "Token Cache", "Redis", "Кэш партнерских токенов")
+
+    ' 5. History & Events (High Load)
+    Container(hist_svc, "History Service", "Go", "Сбор лайков и прогресса просмотра")
+    ContainerDb(db_hist, "Activity DB", "ClickHouse", "Write-heavy storage (Logs)")
+
+    ' --- ASYNC & RECS ---
+    ContainerQueue(kafka, "Event Bus", "Kafka", "UserAction, PaymentSuccess")
+
+    Container(recs_worker, "Recommendations Worker", "Go", "Обмен данными с ML")
+    ContainerDb(redis_recs, "Recommendations Cache", "Redis", "Готовые списки рекомендаций")
+}
+
+' ================= RELATIONS =================
+
+' 1. Entry & Auth
+Rel(user, apigw, "HTTPS")
+Rel(apigw, bff, "Route")
+Rel(apigw, auth, "Validate Token")
+Rel(auth, db_auth, "SQL CRUD")
+
+' 2. BFF calls
+Rel(bff, users_svc, "Получение профиля")
+Rel(bff, sub_svc, "Проверка прав")
+Rel(bff, content_svc, "Получение/поиск контента")
+Rel(bff, resolver_svc, "Получение ссылки")
+Rel(bff, redis_recs, "Redis: получение рекомендаций")
+
+' 3. Service -> Own DB calls
+Rel(users_svc, db_users, "SQL")
+Rel(sub_svc, db_bill, "SQL (ACID Transaction)")
+
+Rel(content_svc, db_content, "SQL (Синхронизация метаданных)")
+Rel(content_svc, es_content, "Search Query")
+
+Rel(hist_svc, db_hist, "Быстрая запись/чтение")
+
+Rel(resolver_svc, redis_tokens, "Cache SET/GET")
+
+' 4. External Integrations
+Rel(resolver_svc, partner_api, "Получение ссылки")
+Rel(sub_svc, payment_gateway, "Оплата")
+
+' 5. Async Flow (Analytics & Recs)
+Rel(bff, hist_svc, "Отправка действия пользователя")
+Rel(hist_svc, kafka, "Publish: UserAction")
+
+Rel(kafka, recs_worker, "Consume")
+Rel(recs_worker, recommender_ext, "Синхронизация данных")
+Rel(recs_worker, redis_recs, "Обновление рекомендаций")
+
+' 6. Cross-Service Sync
+Rel(sub_svc, kafka, "Publish: PaymentSuccess")
+Rel(kafka, users_svc, "Consume: Update User Status")
+
+' User gets video directly
+Rel(user, partner_cdn, "Стриминг видео")
+
+@enduml
