@@ -8,6 +8,8 @@ metadata:
     app: events-service
     app.kubernetes.io/name: {{ include "cinemaabyss.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    proxy.istio.io/config: '{ "holdApplicationUntilProxyStarts": true }'
 spec:
   replicas: {{ .Values.eventsService.replicas }}
   selector:
@@ -25,7 +27,42 @@ spec:
     spec:
       containers:
       - name: events-service
-       .... тут
+        image: "{{ .Values.eventsService.image.repository }}:{{ .Values.eventsService.image.tag }}"
+        imagePullPolicy: {{ .Values.eventsService.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.eventsService.service.targetPort }}
+
+        env:
+        - name: PORT
+          value: "{{ .Values.eventsService.service.targetPort }}"
+        - name: KAFKA_BROKERS
+          value: "kafka:9092"
+
+        envFrom:
+        - configMapRef:
+            name: cinemaabyss-config
+        - secretRef:
+            name: cinemaabyss-secrets
+
+        resources:
+          {{- toYaml .Values.eventsService.resources | nindent 10 }}
+
+        readinessProbe:
+          httpGet:
+            path: /api/events/health
+            port: {{ .Values.eventsService.service.targetPort }}
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /api/events/health
+            port: {{ .Values.eventsService.service.targetPort }}
+          initialDelaySeconds: 15
+          periodSeconds: 20
+
+      restartPolicy: Always
+      imagePullSecrets:
+        - name: dockerconfigjson
 ---
 apiVersion: v1
 kind: Service
@@ -37,5 +74,12 @@ metadata:
     app.kubernetes.io/name: {{ include "cinemaabyss.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
- ........ и тут
+  type: {{ .Values.eventsService.service.type }}
+  selector:
+    app: events-service
+  ports:
+  - port: {{ .Values.eventsService.service.port }}
+    targetPort: {{ .Values.eventsService.service.targetPort }}
+    protocol: TCP
+    name: http
 {{- end }}
